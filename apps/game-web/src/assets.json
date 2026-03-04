@@ -1,0 +1,53 @@
+{
+  "images": {
+    "backgrounds": {
+      "dark_lobby": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/b62f65ed-805a-4e.png",
+        "description": "Deep black core, crimson fog, silhouetted crossed swords.",
+        "metadata": { "width": 1408, "height": 768 }
+      },
+      "last_stand": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/d6de81e2-91da-4b.png",
+        "description": "Dark background for last stand effect"
+      },
+      "game_board": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/7240f891-da4d-4f.png",
+        "description": "Dark lacquered backgammon board.",
+        "metadata": { "width": 1408, "height": 768 }
+      }
+    },
+    "ui": {
+      "doubling_cube": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/67b84881-bcd7-46.png",
+        "description": "Neon purple floating doubling cube.",
+        "metadata": { "width": 1408, "height": 768 }
+      },
+      "doubling_dice": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/969eaf1f-b46d-41.png",
+        "description": "Doubling moment dice overlay"
+      },
+      "dice": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/96a662b9-d89a-4d.png",
+        "description": "Semi-transparent neon green dice.",
+        "metadata": { "width": 1024, "height": 559 }
+      }
+    },
+    "characters": {
+      "swift_assassin": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/7434cd52-8a4d-4f.png",
+        "description": "Swift Assassin female ninja.",
+        "metadata": { "width": 572, "height": 1024 }
+      },
+      "iron_ronin": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/9a47d1a6-fab7-4c.png",
+        "description": "Iron Ronin heavy armor ninja.",
+        "metadata": { "width": 768, "height": 1376 }
+      },
+      "shadow_strategist": {
+        "url": "https://agent8-games.verse8.io/0x4e780ea2ee67d07c3791111290b35c37ef67244e/chat-uploads/12a70254-d41a-41.png",
+        "description": "Shadow Strategist male ninja.",
+        "metadata": { "width": 768, "height": 1376 }
+      }
+    }
+  }
+}
