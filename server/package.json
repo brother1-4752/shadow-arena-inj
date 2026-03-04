@@ -1,0 +1,27 @@
+{
+  "name": "shadow-arena-server",
+  "version": "1.0.0",
+  "description": "Shadow Arena: Ninja Backgammon - Game Server",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@cosmjs/cosmwasm-stargate": "^0.32.0",
+    "@cosmjs/stargate": "^0.32.0",
+    "@cosmjs/proto-signing": "^0.32.0",
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "@types/uuid": "^9.0.7",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0"
+  }
+}
