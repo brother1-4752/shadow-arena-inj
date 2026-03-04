@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InstantiateMsg",
+  "type": "object",
+  "required": [
+    "dispute_resolver",
+    "dispute_window_secs",
+    "fee_bps",
+    "resolve_deadline_secs",
+    "server_authority"
+  ],
+  "properties": {
+    "dispute_resolver": {
+      "type": "string"
+    },
+    "dispute_window_secs": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "fee_bps": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
+    "resolve_deadline_secs": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "server_authority": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

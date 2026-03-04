@@ -1,0 +1,7 @@
+{
+  "dispute_resolver": "inj17c0xh39ll7vxfx0cquz0wwmrd4s2u2l0qrrvas",
+  "dispute_window_secs": 30,
+  "fee_bps": 50,
+  "resolve_deadline_secs": 60,
+  "server_authority": "inj17c0xh39ll7vxfx0cquz0wwmrd4s2u2l0qrrvas"
+}

@@ -1,17 +1,27 @@
-node_modules
+# Environment
 .env
+.env.*
+!.env.example
 
-# Hardhat files
-/cache
-/artifacts
+# Rust / Cargo
+target/
+Cargo.lock
+.cargo-ok
+**/*.rs.bk
 
-# TypeChain files
-/typechain
-/typechain-types
+# CosmWasm artifacts
+artifacts/*.wasm
+artifacts/checksums.txt
 
-# solidity-coverage files
-/coverage
-/coverage.json
+# Node (future server)
+node_modules/
+dist/
+build/
 
-# Hardhat Ignition default folder for deployments against a local node
-ignition/deployments/chain-31337
+# macOS
+.DS_Store
+
+# IDEs
+*.iml
+.idea/
+.vscode/
