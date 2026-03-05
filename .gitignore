@@ -28,3 +28,4 @@ build/
 server/.env
 server/node_modules/
 server/dist/
+.vercel
