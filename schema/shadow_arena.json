@@ -263,6 +263,27 @@
       {
         "type": "object",
         "required": [
+          "cancel_unfunded"
+        ],
+        "properties": {
+          "cancel_unfunded": {
+            "type": "object",
+            "required": [
+              "match_id"
+            ],
+            "properties": {
+              "match_id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
           "update_config"
         ],
         "properties": {

@@ -13,9 +13,10 @@ const DEFAULT_STD_FEE = {
   gas: "400000",
 };
 
-const CONTRACT_ADDRESS =
+const CONTRACT_ADDRESS = (
   import.meta.env.VITE_CONTRACT_ADDRESS ||
-  "inj1kqqdhujw0tvmwa5z83z62hfqza5uhkpfrajvfp";
+  "inj1kqqdhujw0tvmwa5z83z62hfqza5uhkpfrajvfp"
+).trim();
 const CHAIN_ID = "injective-888";
 const REST_ENDPOINT = "https://testnet.sentry.lcd.injective.network:443";
 
