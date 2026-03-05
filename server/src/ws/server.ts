@@ -59,7 +59,7 @@ export class GameServer {
 
   private handleConnection(ws: WebSocket, req: any) {
     const params = new URLSearchParams(req.url?.split("?")[1] || "");
-    const rawAddress = params.get("address") || "";
+    const rawAddress = (params.get("address") || "").trim();
     const matchId = params.get("matchId");
     const stake = params.get("stake") || "0";
     const denom = params.get("denom") || "inj";

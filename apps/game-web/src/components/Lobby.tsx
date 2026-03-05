@@ -113,26 +113,11 @@ export default function Lobby() {
           </h2>
         </div>
 
-        {/* Wallet connect prompt (shown when not connected) */}
+        {/* Wallet status hint (shown when not connected) */}
         {!wallet.connected && (
-          <div className="text-center space-y-3">
-            <p className="text-gray-500 text-sm uppercase tracking-wider">
-              Connect wallet for online and stake modes
-            </p>
-            <button
-              onClick={wallet.connect}
-              disabled={wallet.connecting}
-              className="px-8 py-3 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-700/50 rounded
-                         text-purple-100 font-bold tracking-wider uppercase transition-all duration-300
-                         hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] hover:border-purple-500 backdrop-blur-sm
-                         disabled:opacity-50 disabled:cursor-wait"
-            >
-              {wallet.connecting ? "Connecting..." : "Connect Keplr Wallet"}
-            </button>
-            {wallet.error && (
-              <p className="text-red-400 text-sm">{wallet.error}</p>
-            )}
-          </div>
+          <p className="text-gray-500 text-sm uppercase tracking-wider">
+            Connect wallet (top-right) for online and stake modes
+          </p>
         )}
 
         <div className="flex flex-col w-full max-w-md gap-6">
