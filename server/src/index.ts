@@ -11,7 +11,7 @@ new GameServer(PORT);
 console.log(`[Server] Shadow Arena Game Server started`);
 console.log(`[Server] Port: ${PORT}`);
 console.log(
-  `[Server] Contract: ${process.env.CONTRACT_ADDRESS || "(not set)"}`,
+  `[Server] Contract: ${JSON.stringify(process.env.CONTRACT_ADDRESS)} (len=${process.env.CONTRACT_ADDRESS?.length})`,
 );
 console.log(
   `[Server] Chain: ${process.env.INJECTIVE_CHAIN_ID || "injective-888"}`,

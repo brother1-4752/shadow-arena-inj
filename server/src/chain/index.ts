@@ -42,7 +42,7 @@ export function getChainBroadcaster(): {
 }
 
 export function getContractAddress(): string {
-  const addr = process.env.CONTRACT_ADDRESS;
+  const addr = process.env.CONTRACT_ADDRESS?.trim();
   if (!addr) throw new Error("CONTRACT_ADDRESS is not set");
   return addr;
 }

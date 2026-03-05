@@ -11,7 +11,11 @@ export interface CreateMatchParams {
 
 export async function createMatch(params: CreateMatchParams): Promise<string> {
   const { broadcaster, address } = getChainBroadcaster();
-  const contractAddress = getContractAddress();
+  const contractAddress = getContractAddress().trim();
+  const playerA = params.playerA.trim();
+  const playerB = params.playerB.trim();
+
+  console.log(`[Chain] CreateMatch debug: contract=${JSON.stringify(contractAddress)} playerA=${JSON.stringify(playerA)} playerB=${JSON.stringify(playerB)}`);
 
   const msg = MsgExecuteContract.fromJSON({
     sender: address,
@@ -19,8 +23,8 @@ export async function createMatch(params: CreateMatchParams): Promise<string> {
     msg: {
       create_match: {
         match_id: params.matchId,
-        player_a: params.playerA,
-        player_b: params.playerB,
+        player_a: playerA,
+        player_b: playerB,
         stake: params.stake,
         denom: params.denom,
       },

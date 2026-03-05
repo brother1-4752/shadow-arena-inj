@@ -20,7 +20,7 @@ export async function submitResult(
     msg: {
       submit_result: {
         match_id: params.matchId,
-        winner: params.winner,
+        winner: params.winner.trim(),
         multiplier: params.multiplier,
         game_hash: params.gameHash,
         evidence_hash: null,
