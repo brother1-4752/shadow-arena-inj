@@ -8,12 +8,35 @@ import PlayerPanel from './PlayerPanel';
 import DiceDisplay from './DiceDisplay';
 import TurnTimer from './TurnTimer';
 import DoublingCubeIndicator from './DoublingCubeIndicator';
+import { useGameSocket } from '../hooks/useGameSocket';
+import { useWalletContext } from '../hooks/WalletContext';
 
 export default function GameShell() {
-  const [gameState, setGameState] = useState(() => createInitialState());
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const wallet = useWalletContext();
+
+  const isOnline = params.get('mode') === 'online' || params.get('mode') === 'ai-server';
+  const serverUrl = params.get('server') || 'ws://localhost:8080';
+  const onlineMode = params.get('mode') === 'ai-server' ? 'ai' as const : 'pvp' as const;
+  const onlineDifficulty = (params.get('difficulty') || 'normal') as 'easy' | 'normal';
+  const playerAddress = wallet.address || 'not-connected';
+
+  // Online mode hook — only connects when isOnline AND wallet is connected
+  const online = useGameSocket({
+    enabled: isOnline && wallet.connected,
+    serverUrl,
+    address: playerAddress,
+    mode: onlineMode,
+    difficulty: onlineDifficulty,
+  });
+
+  const [localGameState, setLocalGameState] = useState(() => createInitialState());
+  const gameState = isOnline ? online.gameState : localGameState;
+  const setGameState = isOnline ? (() => {}) as any : setLocalGameState;
+
   const [fastMode, setFastMode] = useState(false);
   const [timeLeft, setTimeLeft] = useState(45);
-  
+
   const [originalRoll, setOriginalRoll] = useState<number[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<number | 'bar' | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -21,8 +44,20 @@ export default function GameShell() {
   const [hasShownLastStand, setHasShownLastStand] = useState(false);
   const [showLastStandOverlay, setShowLastStandOverlay] = useState(false);
 
-  const isDev = useMemo(() => new URLSearchParams(window.location.search).get('dev') === 'true', []);
-  const aiDifficulty = useMemo(() => new URLSearchParams(window.location.search).get('diff') === 'normal' ? 'normal' : 'easy', []);
+  const isDev = useMemo(() => params.get('dev') === 'true', [params]);
+  const aiDifficulty = useMemo(() => params.get('diff') === 'normal' ? 'normal' : 'easy', [params]);
+
+  // My player in online mode (which side am I?)
+  const myPlayer: Player = isOnline ? (online.myPlayer ?? 0) : 0;
+  const isMyTurn = gameState.turn === myPlayer;
+
+  // Player display info
+  const myAddress = wallet.address
+    ? `${wallet.address.slice(0, 10)}...${wallet.address.slice(-4)}`
+    : 'Not Connected';
+  const opponentLabel = isOnline
+    ? (onlineMode === 'ai' ? 'Server AI' : 'Opponent')
+    : 'Shadow AI';
 
   const handleSkipToEnd = useCallback(() => {
     setGameState(prev => {
@@ -65,9 +100,9 @@ export default function GameShell() {
   }, [validSteps, selectedPoint]);
 
   const movablePoints = useMemo(() => {
-    if (gameState.turn !== 0 || gameState.dice.length === 0 || selectedPoint !== null) return [];
+    if (!isMyTurn || gameState.dice.length === 0 || selectedPoint !== null) return [];
     return Array.from(new Set(validSteps.map(s => s.from)));
-  }, [gameState.turn, gameState.dice.length, selectedPoint, validSteps]);
+  }, [isMyTurn, gameState.dice.length, selectedPoint, validSteps]);
 
   // Effect 2: Last Stand trigger
   useEffect(() => {
@@ -80,8 +115,9 @@ export default function GameShell() {
     }
   }, [validSteps, fastMode, hasShownLastStand, gameState.winner]);
 
-  // Handle timer ticks & expiration
+  // Handle timer ticks & expiration (local mode only)
   useEffect(() => {
+    if (isOnline) return; // Server handles timers in online mode
     if (gameState.winner) return;
     if (timeLeft <= 0) {
        if (gameState.doubleOffered) {
@@ -103,8 +139,9 @@ export default function GameShell() {
     return () => clearInterval(timerId);
   }, [timeLeft, gameState]);
 
-  // Shadow AI (Player 1) Logic
+  // Shadow AI (Player 1) Logic — local mode only
   useEffect(() => {
+    if (isOnline) return; // AI runs on server in online mode
     if (gameState.winner !== null || gameState.doubleOffered || gameState.turn !== 1) return;
 
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -201,36 +238,38 @@ export default function GameShell() {
 
   const handlePointClick = useCallback((pt: number | 'bar' | 'off') => {
     if (gameState.winner || gameState.doubleOffered) return;
-    if (gameState.turn !== 0) return; // Prevent human clicks during AI turn
+    if (!isMyTurn) return; // Prevent clicks when not my turn
 
     const canSelect = (p: number | 'bar') => validSteps.some(s => s.from === p);
 
     if (selectedPoint !== null) {
        // Attempt to execute move
-       if (legalDestinations.includes(pt)) {
-          try {
-             const nextState = applyStep(gameState, selectedPoint, pt);
-             
-             // 1. Immediately update game state with the pristine, un-mutated nextState
-             setGameState(nextState);
-
-             // 2. Trigger visual hit effect if opponent bar increased
-             const opponent = (1 - gameState.turn) as Player;
-             if (nextState.bar[opponent] > gameState.bar[opponent]) {
-                setHitEvent(Date.now());
-             }
-
-             // 3. Clear selection and handle turn passing
+       if (pt !== 'bar' && legalDestinations.includes(pt)) {
+          const dest = pt; // pt is now narrowed to number | 'off'
+          if (isOnline) {
+             // Online mode: send move to server
+             online.sendMove(selectedPoint, dest);
              setSelectedPoint(null);
-             
-             // Handle automatic pass if no moves left
-             if (nextState.dice.length === 0 && !nextState.winner) {
-                setTimeLeft(45);
-                setOriginalRoll([]);
+          } else {
+             try {
+                const nextState = applyStep(gameState, selectedPoint, dest);
+                setGameState(nextState);
+
+                const opponent = (1 - gameState.turn) as Player;
+                if (nextState.bar[opponent] > gameState.bar[opponent]) {
+                   setHitEvent(Date.now());
+                }
+
+                setSelectedPoint(null);
+
+                if (nextState.dice.length === 0 && !nextState.winner) {
+                   setTimeLeft(45);
+                   setOriginalRoll([]);
+                }
+             } catch (e) {
+                console.error(e);
+                setSelectedPoint(null);
              }
-          } catch (e) {
-             console.error(e);
-             setSelectedPoint(null);
           }
        } else if (pt !== 'off' && canSelect(pt)) {
           setSelectedPoint(pt);
@@ -242,27 +281,36 @@ export default function GameShell() {
           setSelectedPoint(pt);
        }
     }
-  }, [gameState, selectedPoint, legalDestinations, validSteps]);
+  }, [gameState, selectedPoint, legalDestinations, validSteps, isOnline, isMyTurn, online]);
 
   const renderActionArea = (playerIndex: Player) => {
     const isActor = gameState.doubleOffered ? (1 - gameState.turn) === playerIndex : gameState.turn === playerIndex;
     if (!isActor || gameState.winner !== null) return null;
 
+    // In online mode, only show controls for our player
+    if (isOnline && playerIndex !== myPlayer) return null;
+
     // Responding to a double offer
     if (gameState.doubleOffered) {
+       const handleAccept = () => {
+         if (isOnline) { online.acceptDouble(); } else { setGameState(acceptDouble(gameState)); setTimeLeft(45); }
+       };
+       const handleResign = () => {
+         if (isOnline) { online.resignDouble(); } else { setGameState(rejectDouble(gameState)); }
+       };
        return (
          <div className="flex items-center gap-6 z-30">
             <div className={`text-purple-300 font-bold animate-pulse text-xl drop-shadow-[0_0_10px_rgba(168,85,247,0.8)] ${!fastMode ? 'hidden' : ''}`}>
                Double Offered!
             </div>
-            <button 
-               onClick={() => { setGameState(acceptDouble(gameState)); setTimeLeft(45); }} 
+            <button
+               onClick={handleAccept}
                className={`px-6 py-2 bg-green-700 hover:bg-green-600 rounded text-white font-bold transition-colors shadow-[0_0_15px_rgba(21,128,61,0.5)] ${!fastMode ? 'hidden' : ''}`}
             >
                Accept
             </button>
-            <button 
-               onClick={() => setGameState(rejectDouble(gameState))} 
+            <button
+               onClick={handleResign}
                className={`px-6 py-2 bg-red-900 hover:bg-red-800 rounded text-white font-bold transition-colors ${!fastMode ? 'hidden' : ''}`}
             >
                Resign
@@ -274,29 +322,37 @@ export default function GameShell() {
     // Before rolling
     if (gameState.dice.length === 0) {
        const canDouble = !gameState.doubleOffered && (gameState.cubeOwner === null || gameState.cubeOwner === gameState.turn);
+       const handleRoll = () => {
+         if (isOnline) {
+           online.rollDice();
+         } else {
+           const roll = generateDice();
+           setOriginalRoll(roll);
+           const nextState = setDice(gameState, roll);
+           setGameState(nextState);
+           setTimeLeft(45);
+           if (nextState.dice.length === 0 && nextState.turn !== gameState.turn) {
+              setToastMsg("No legal moves available. Turn passed.");
+              setTimeout(() => setToastMsg(null), 3000);
+              setOriginalRoll([]);
+           }
+         }
+       };
+       const handleDouble = () => {
+         if (isOnline) { online.offerDouble(); } else { setGameState(offerDouble(gameState)); setTimeLeft(15); }
+       };
        return (
          <div className="flex items-center gap-6 z-30">
             {canDouble && (
-              <button 
-                onClick={() => { setGameState(offerDouble(gameState)); setTimeLeft(15); }} 
+              <button
+                onClick={handleDouble}
                 className="px-6 py-2 bg-purple-900/60 hover:bg-purple-800/80 border border-purple-500/50 rounded text-purple-200 font-bold transition-colors shadow-[0_0_10px_rgba(168,85,247,0.3)]"
               >
                  Offer Double
               </button>
             )}
-            <button 
-              onClick={() => {
-                 const roll = generateDice();
-                 setOriginalRoll(roll);
-                 const nextState = setDice(gameState, roll);
-                 setGameState(nextState);
-                 setTimeLeft(45);
-                 if (nextState.dice.length === 0 && nextState.turn !== gameState.turn) {
-                    setToastMsg("No legal moves available. Turn passed.");
-                    setTimeout(() => setToastMsg(null), 3000);
-                    setOriginalRoll([]);
-                 }
-              }} 
+            <button
+              onClick={handleRoll}
               className="px-8 py-3 bg-green-900/60 hover:bg-green-800/80 border border-green-500/50 rounded text-green-200 font-bold uppercase tracking-wider text-lg transition-colors shadow-[0_0_15px_rgba(21,128,61,0.3)]"
             >
               Roll Dice
@@ -305,10 +361,18 @@ export default function GameShell() {
        );
     }
 
-    // Mid-turn displaying dice
+    // Mid-turn displaying dice — also show End Turn button in online mode
     return (
        <div className="flex items-center gap-6 z-30">
          <DiceDisplay originalRoll={originalRoll} remainingDice={gameState.dice} fastMode={fastMode} />
+         {isOnline && validSteps.length === 0 && (
+           <button
+             onClick={() => online.endTurn()}
+             className="px-6 py-2 bg-yellow-900/60 hover:bg-yellow-800/80 border border-yellow-500/50 rounded text-yellow-200 font-bold transition-colors"
+           >
+             End Turn
+           </button>
+         )}
        </div>
     );
   };
@@ -323,9 +387,59 @@ export default function GameShell() {
       />
       <div className="absolute inset-0 z-0 bg-black/60 pointer-events-none" />
 
+      {/* Wallet Required Gate */}
+      {!wallet.connected && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/95">
+          <div className="text-center space-y-6">
+            <div className="text-2xl text-gray-300 font-bold tracking-widest uppercase">Wallet Required</div>
+            <div className="text-gray-500">Connect your Keplr wallet to play</div>
+            <button
+              onClick={wallet.connect}
+              disabled={wallet.connecting}
+              className="px-8 py-3 bg-purple-900/60 hover:bg-purple-800/80 border border-purple-600/50 rounded-lg
+                         text-purple-200 font-bold tracking-wider uppercase transition-all
+                         hover:shadow-[0_0_15px_rgba(168,85,247,0.4)] disabled:opacity-50"
+            >
+              {wallet.connecting ? 'Connecting...' : 'Connect Wallet'}
+            </button>
+            {wallet.error && <p className="text-red-400 text-sm">{wallet.error}</p>}
+          </div>
+        </div>
+      )}
+
+      {/* Online Mode: Waiting / Disconnected / Error Overlay */}
+      {isOnline && wallet.connected && online.waiting && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/90">
+          <div className="text-center space-y-4">
+            <div className="text-2xl text-red-400 font-bold tracking-widest uppercase animate-pulse">Waiting for Opponent...</div>
+            <div className="text-gray-500">Open another browser tab with a different wallet to test PvP</div>
+          </div>
+        </div>
+      )}
+      {isOnline && wallet.connected && online.opponentDisconnected && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/70 pointer-events-none">
+          <div className="text-xl text-yellow-400 font-bold tracking-widest uppercase animate-pulse">
+            Opponent Disconnected — Waiting for reconnection...
+          </div>
+        </div>
+      )}
+      {isOnline && wallet.connected && online.error && (
+        <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/90">
+          <div className="text-center space-y-4">
+            <div className="text-xl text-red-500 font-bold">{online.error}</div>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-red-900/60 hover:bg-red-800/80 border border-red-600/50 rounded text-red-200 font-bold transition-all"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main UI Shell (Z-10) */}
       <div className="relative z-10 flex flex-col h-screen w-full max-w-6xl mx-auto border-x border-gray-900/50 shadow-2xl bg-black/40 backdrop-blur-sm">
-        
+
         {/* Dev Tools */}
         {isDev && (
           <button
@@ -336,8 +450,8 @@ export default function GameShell() {
           </button>
         )}
 
-        {/* Top Right Controls */}
-        <div className="absolute top-4 right-4 z-50 flex items-center gap-4">
+        {/* Top Left Controls (moved from right to avoid WalletBar overlap) */}
+        <div className="absolute top-4 left-4 z-50 flex items-center gap-4">
           <button 
             onClick={() => setFastMode(prev => !prev)}
             className={`p-2 rounded-full border shadow-lg ${fastMode ? 'bg-gray-800 border-gray-600 text-gray-400' : 'bg-black/50 border-gray-700 text-gray-300 hover:text-white'} transition-colors`}
@@ -347,12 +461,12 @@ export default function GameShell() {
           </button>
         </div>
 
-        {/* Top Info Panel: Player 1 */}
+        {/* Top Info Panel: Player 1 (opponent) */}
         <div className="relative">
           <PlayerPanel
             playerIndex={1}
-            name="Shadow AI"
-            address="0x8fB...3A9c"
+            name={myPlayer === 1 ? 'You' : opponentLabel}
+            address={myPlayer === 1 ? myAddress : ''}
             avatarUrl={Assets.images.characters.shadow_strategist.url}
             pips={p1Pips}
             borneOff={gameState.off[1]}
@@ -467,28 +581,37 @@ export default function GameShell() {
           )}
 
           {/* Winner Overlay */}
-          {gameState.winner !== null && (
+          {(gameState.winner !== null || online.gameOver) && (
              <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
                 <div className="flex flex-col items-center gap-6 p-12 border border-yellow-500/50 bg-neutral-900/90 rounded-lg shadow-[0_0_50px_rgba(234,179,8,0.3)]">
                    <h2 className="text-4xl font-black text-yellow-500 tracking-widest uppercase text-center">
-                     {gameState.winner === 0 ? "Swift Assassin" : "Shadow AI"} Wins!
+                     {(isOnline ? (online.gameOver?.winner === myPlayer) : gameState.winner === 0) ? "Victory!" : "Defeat"}
                    </h2>
                    <p className="text-xl text-yellow-200/80">
-                     {gameState.winType === 'gammon' ? 'Gammon! (x2)' : gameState.winType === 'backgammon' ? 'Backgammon! (x3)' : gameState.winType === 'resign' ? 'By Resignation' : 'Normal Win'} 
+                     {gameState.winType === 'gammon' ? 'Gammon! (x2)' : gameState.winType === 'backgammon' ? 'Backgammon! (x3)' : gameState.winType === 'resign' ? 'By Resignation' : 'Normal Win'}
                      {' '} - Total Points: {gameState.multiplier}
                    </p>
-                   <button 
+                   {online.gameOver?.gameHash && (
+                     <p className="text-xs text-gray-500 font-mono break-all max-w-md text-center">
+                       Game Hash: {online.gameOver.gameHash}
+                     </p>
+                   )}
+                   <button
                      onClick={() => {
-                        setGameState(createInitialState());
-                        setOriginalRoll([]);
-                        setSelectedPoint(null);
-                        setTimeLeft(45);
-                        setHasShownLastStand(false);
-                        setShowLastStandOverlay(false);
+                        if (isOnline) {
+                          window.location.href = '/';
+                        } else {
+                          setGameState(createInitialState());
+                          setOriginalRoll([]);
+                          setSelectedPoint(null);
+                          setTimeLeft(45);
+                          setHasShownLastStand(false);
+                          setShowLastStandOverlay(false);
+                        }
                      }}
                      className="mt-4 px-8 py-3 bg-yellow-600/20 border border-yellow-500/50 hover:bg-yellow-600/40 text-yellow-100 font-bold rounded uppercase tracking-wider transition-colors"
                    >
-                     Play Again
+                     {isOnline ? 'Back to Lobby' : 'Play Again'}
                    </button>
                 </div>
              </div>
@@ -514,8 +637,8 @@ export default function GameShell() {
           </div>
           <PlayerPanel
             playerIndex={0}
-            name="Swift Assassin"
-            address="0x42A...9F1b"
+            name={myPlayer === 0 ? 'You' : opponentLabel}
+            address={myPlayer === 0 ? myAddress : ''}
             avatarUrl={Assets.images.characters.swift_assassin.url}
             pips={p0Pips}
             borneOff={gameState.off[0]}

@@ -1,0 +1,90 @@
+import { useState, useCallback } from 'react';
+import {
+  ChainId,
+  MsgExecuteContractCompat,
+  MsgBroadcasterWithPk,
+} from '@injectivelabs/sdk-ts';
+
+const CHAIN_ID = 'injective-888'; // testnet
+const REST_ENDPOINT = 'https://testnet.sentry.lcd.injective.network:443';
+const RPC_ENDPOINT = 'https://testnet.sentry.tm.injective.network:443';
+
+const INJECTIVE_TESTNET_CHAIN_INFO = {
+  chainId: CHAIN_ID,
+  chainName: 'Injective Testnet',
+  rpc: RPC_ENDPOINT,
+  rest: REST_ENDPOINT,
+  bip44: { coinType: 60 },
+  bech32Config: {
+    bech32PrefixAccAddr: 'inj',
+    bech32PrefixAccPub: 'injpub',
+    bech32PrefixValAddr: 'injvaloper',
+    bech32PrefixValPub: 'injvaloperpub',
+    bech32PrefixConsAddr: 'injvalcons',
+    bech32PrefixConsPub: 'injvalconspub',
+  },
+  currencies: [{ coinDenom: 'INJ', coinMinimalDenom: 'inj', coinDecimals: 18 }],
+  feeCurrencies: [{ coinDenom: 'INJ', coinMinimalDenom: 'inj', coinDecimals: 18, gasPriceStep: { low: 500000000, average: 1000000000, high: 1500000000 } }],
+  stakeCurrency: { coinDenom: 'INJ', coinMinimalDenom: 'inj', coinDecimals: 18 },
+};
+
+declare global {
+  interface Window {
+    keplr?: {
+      experimentalSuggestChain(chainInfo: any): Promise<void>;
+      enable(chainId: string): Promise<void>;
+      getKey(chainId: string): Promise<{ bech32Address: string; pubKey: Uint8Array; name: string }>;
+      getOfflineSigner(chainId: string): any;
+    };
+  }
+}
+
+export interface UseWalletReturn {
+  address: string | null;
+  connected: boolean;
+  connecting: boolean;
+  error: string | null;
+  connect: () => Promise<void>;
+  disconnect: () => void;
+}
+
+export function useWallet(): UseWalletReturn {
+  const [address, setAddress] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const connect = useCallback(async () => {
+    if (!window.keplr) {
+      setError('Keplr wallet not found. Please install the Keplr extension.');
+      return;
+    }
+
+    setConnecting(true);
+    setError(null);
+
+    try {
+      await window.keplr.experimentalSuggestChain(INJECTIVE_TESTNET_CHAIN_INFO);
+      await window.keplr.enable(CHAIN_ID);
+      const key = await window.keplr.getKey(CHAIN_ID);
+      setAddress(key.bech32Address);
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect wallet');
+    } finally {
+      setConnecting(false);
+    }
+  }, []);
+
+  const disconnect = useCallback(() => {
+    setAddress(null);
+    setError(null);
+  }, []);
+
+  return {
+    address,
+    connected: address !== null,
+    connecting,
+    error,
+    connect,
+    disconnect,
+  };
+}
