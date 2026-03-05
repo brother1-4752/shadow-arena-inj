@@ -84,6 +84,7 @@ pub fn execute(
         ExecuteMsg::EmergencyCancel { match_id } => {
             exec_emergency_cancel(deps, env, info, match_id)
         }
+        ExecuteMsg::CancelUnfunded { match_id } => exec_cancel_unfunded(deps, info, match_id),
         ExecuteMsg::UpdateConfig {
             server_authority,
             dispute_resolver,
@@ -505,6 +506,59 @@ fn exec_emergency_cancel(
             attr("action", "emergency_cancel"),
             attr("match_id", &match_id),
         ]))
+}
+
+/// Cancel a match that is still in Created or Funded state (not yet Active).
+/// Either player can call this. Refunds any player who has already funded.
+fn exec_cancel_unfunded(
+    deps: DepsMut,
+    info: MessageInfo,
+    match_id: String,
+) -> Result<Response, ContractError> {
+    let mut m = load_match(deps.storage, &match_id)?;
+
+    match m.state {
+        MatchState::Created | MatchState::Funded => {}
+        _ => {
+            return Err(ContractError::InvalidState {
+                expected: "Created or Funded".to_string(),
+                actual: format!("{:?}", m.state),
+            })
+        }
+    }
+
+    if info.sender != m.player_a && info.sender != m.player_b {
+        return Err(ContractError::NotAPlayer);
+    }
+
+    m.state = MatchState::Cancelled;
+    MATCHES.save(deps.storage, &match_id, &m)?;
+
+    let mut resp = Response::new();
+
+    if m.player_a_funded {
+        resp = resp.add_message(BankMsg::Send {
+            to_address: m.player_a.to_string(),
+            amount: vec![Coin {
+                denom: m.denom.clone(),
+                amount: m.stake,
+            }],
+        });
+    }
+    if m.player_b_funded {
+        resp = resp.add_message(BankMsg::Send {
+            to_address: m.player_b.to_string(),
+            amount: vec![Coin {
+                denom: m.denom.clone(),
+                amount: m.stake,
+            }],
+        });
+    }
+
+    Ok(resp.add_attributes(vec![
+        attr("action", "cancel_unfunded"),
+        attr("match_id", &match_id),
+    ]))
 }
 
 fn exec_update_config(

@@ -14,10 +14,12 @@
     "@injectivelabs/networks": "^1.18.7",
     "@injectivelabs/sdk-ts": "^1.18.7",
     "@injectivelabs/ts-types": "^1.18.7",
+    "buffer": "^6.0.3",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.13.1"
+    "react-router-dom": "^7.13.1",
+    "vite-plugin-node-polyfills": "^0.25.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.28",

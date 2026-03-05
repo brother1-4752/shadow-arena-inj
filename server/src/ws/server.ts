@@ -1,5 +1,6 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { submitResult } from "../chain/submit";
+import { createMatch as createOnChainMatch } from "../chain/match";
 import { v4 as uuidv4 } from "uuid";
 import {
   GameState,
@@ -22,6 +23,7 @@ interface PlayerConn {
   address: string;
   player: Player;
   disconnectedAt?: number;
+  away?: boolean; // true when tab is hidden
 }
 
 interface Match {
@@ -33,13 +35,16 @@ interface Match {
   stake: string;
   denom: string;
   turnTimer?: NodeJS.Timeout;
+  turnTimerStartedAt?: number; // epoch ms when the turn timer last started
+  turnTimerRemainingMs?: number; // remaining ms when paused
   disconnectTimer?: NodeJS.Timeout;
   aiDifficulty?: AIDifficulty;
   aiPlayer?: Player;
+  fundedPlayers: Set<string>; // addresses of players who have funded
 }
 
 const TURN_TIMEOUT_MS = 45_000;
-const RECONNECT_GRACE_MS = 60_000;
+const RECONNECT_GRACE_MS = 30_000;
 
 export class GameServer {
   private wss: WebSocketServer;
@@ -54,13 +59,20 @@ export class GameServer {
 
   private handleConnection(ws: WebSocket, req: any) {
     const params = new URLSearchParams(req.url?.split("?")[1] || "");
-    const address = params.get("address") || `anon_${uuidv4().slice(0, 8)}`;
+    const rawAddress = params.get("address") || "";
     const matchId = params.get("matchId");
     const stake = params.get("stake") || "0";
     const denom = params.get("denom") || "inj";
 
-    console.log(`[GameServer] Connection: ${address}`);
+    // If guest mode requested or no address, use client-provided address or generate fallback
+    const isGuest = params.get("guest") === "true";
+    const address = rawAddress || `guest_${uuidv4().slice(0, 12)}`;
 
+    console.log(
+      `[GameServer] Connection: ${address}${isGuest ? " (guest)" : ""}`,
+    );
+
+    // Set up message and disconnect handlers (always, regardless of match type)
     ws.on("message", (data) => {
       try {
         const msg: ClientMessage = JSON.parse(data.toString());
@@ -69,17 +81,86 @@ export class GameServer {
         this.send(ws, { type: "ERROR", message: "Invalid message format" });
       }
     });
+    ws.on("close", () => this.handleDisconnect(address, ws));
 
-    ws.on("close", () => this.handleDisconnect(address));
+    // Check if this address is in a pending match (waiting for opponent)
+    const pending = this.findPendingByAddress(address);
+    if (pending && !matchId) {
+      // Update WS reference and re-send waiting state
+      const conn = pending.match.players.get(address);
+      if (conn) conn.ws = ws;
+      this.send(ws, { type: "MATCH_CREATED", matchId: pending.match.id });
+      this.send(ws, { type: "WAITING_FOR_OPPONENT" });
+      console.log(
+        `[GameServer] Re-attached ${address} to pending match ${pending.match.id}`,
+      );
+      return;
+    }
 
-    // AI match, manual match, or auto-match
+    // Check if this address is in an active match (reconnect)
+    const existingMatch = this.findMatchByAddress(address);
+    if (existingMatch && !matchId) {
+      const conn = existingMatch.players.get(address);
+      if (conn) {
+        conn.ws = ws;
+        conn.disconnectedAt = undefined;
+        if (existingMatch.disconnectTimer) {
+          clearTimeout(existingMatch.disconnectTimer);
+          existingMatch.disconnectTimer = undefined;
+        }
+        this.broadcastToMatch(
+          existingMatch,
+          { type: "OPPONENT_RECONNECTED" },
+          address,
+        );
+
+        // Determine actual funded status for this reconnecting player
+        const isStake = existingMatch.stake !== "0";
+        const selfFunded = existingMatch.fundedPlayers.has(address);
+        const allFunded = existingMatch.fundedPlayers.size >= existingMatch.players.size;
+
+        // Only resume turn timer if both players have funded (or non-stake match)
+        if (!isStake || allFunded) {
+          const remainingMs = existingMatch.turnTimerRemainingMs || TURN_TIMEOUT_MS;
+          this.resumeTurnTimer(existingMatch);
+          this.broadcastToMatch(existingMatch, {
+            type: "GAME_RESUMED",
+            remainingTurnMs: remainingMs,
+          });
+        }
+
+        this.send(ws, {
+          type: "MATCH_JOINED",
+          matchId: existingMatch.id,
+          player: conn.player,
+          state: existingMatch.state,
+          reconnect: true,
+          stake: existingMatch.stake,
+          denom: existingMatch.denom,
+          funded: selfFunded,
+          bothFunded: allFunded,
+        });
+        console.log(
+          `[GameServer] Reconnected ${address} to match ${existingMatch.id} (funded: ${selfFunded}, bothFunded: ${allFunded})`,
+        );
+        return;
+      }
+    }
+
+    // AI match, manual match with specific ID, create new match, or auto-match
     const mode = params.get("mode");
     const difficulty = params.get("difficulty") as AIDifficulty | null;
+    const createMatch = params.get("create") === "true";
 
     if (mode === "ai") {
       this.createAIMatch(ws, address, stake, denom, difficulty || "easy");
     } else if (matchId) {
       this.joinOrCreateMatch(ws, address, matchId, stake, denom);
+    } else if (createMatch) {
+      // Create a new match and send the ID back so the user can share it
+      const newMatchId = uuidv4().slice(0, 8);
+      this.createPendingMatch(newMatchId, ws, address, stake, denom);
+      this.send(ws, { type: "MATCH_CREATED", matchId: newMatchId });
     } else {
       this.autoMatch(ws, address, stake, denom);
     }
@@ -91,9 +172,17 @@ export class GameServer {
     stake: string,
     denom: string,
   ) {
+    // If there's a waiting player with a dead WS, clean it up first
     if (
       this.waitingPlayer &&
-      this.waitingPlayer.ws.readyState === WebSocket.OPEN
+      this.waitingPlayer.ws.readyState !== WebSocket.OPEN
+    ) {
+      this.waitingPlayer = null;
+    }
+
+    if (
+      this.waitingPlayer &&
+      this.waitingPlayer.address !== address // Prevent self-matching
     ) {
       const opponent = this.waitingPlayer;
       this.waitingPlayer = null;
@@ -109,6 +198,7 @@ export class GameServer {
         denom,
       );
     } else {
+      // If same address was already waiting, just replace WS (StrictMode scenario)
       this.waitingPlayer = { ws, address };
       this.send(ws, { type: "WAITING_FOR_OPPONENT" });
     }
@@ -145,6 +235,7 @@ export class GameServer {
       denom,
       aiDifficulty: difficulty,
       aiPlayer: "B",
+      fundedPlayers: new Set(),
     };
 
     this.matches.set(matchId, match);
@@ -219,10 +310,9 @@ export class GameServer {
     stake: string,
     denom: string,
   ) {
+    // Check for an active match first (reconnect scenario)
     const match = this.matches.get(matchId);
-
     if (match) {
-      // Reconnect
       const conn = match.players.get(address);
       if (conn) {
         conn.ws = ws;
@@ -234,13 +324,37 @@ export class GameServer {
         this.broadcastToMatch(match, { type: "OPPONENT_RECONNECTED" }, address);
         this.send(ws, { type: "GAME_STATE", state: match.state, matchId });
         console.log(`[GameServer] Reconnected: ${address} to match ${matchId}`);
+        return;
       }
-    } else if (match === undefined) {
-      // Waiting for second player
-      const partial = this.matches.get(`pending_${matchId}`);
-      if (!partial) {
-        this.createPendingMatch(matchId, ws, address, stake, denom);
+    }
+
+    // Check for a pending match awaiting second player
+    const pendingKey = `pending_${matchId}`;
+    const pending = this.matches.get(pendingKey);
+    if (pending) {
+      // Second player joining — promote pending to active match
+      const creatorConn = [...pending.players.values()][0];
+      if (!creatorConn || creatorConn.address === address) {
+        // Same player trying to join their own match
+        this.send(ws, { type: "WAITING_FOR_OPPONENT" });
+        return;
       }
+      this.matches.delete(pendingKey);
+      this.createMatch(
+        matchId,
+        creatorConn.ws,
+        creatorConn.address,
+        ws,
+        address,
+        pending.stake,
+        pending.denom,
+      );
+      console.log(
+        `[GameServer] Player ${address} joined pending match ${matchId}`,
+      );
+    } else {
+      // No match exists with this ID — create a new pending one
+      this.createPendingMatch(matchId, ws, address, stake, denom);
     }
   }
 
@@ -260,6 +374,7 @@ export class GameServer {
       turnLog: {},
       stake,
       denom,
+      fundedPlayers: new Set(),
     });
     this.send(ws, { type: "WAITING_FOR_OPPONENT" });
   }
@@ -287,24 +402,182 @@ export class GameServer {
       turnLog: {},
       stake,
       denom,
+      fundedPlayers: new Set(),
     };
 
     this.matches.set(matchId, match);
 
-    // Send MATCH_JOINED to each player with their assignment
-    this.send(wsA, { type: "MATCH_JOINED", matchId, player: "A", state });
-    this.send(wsB, { type: "MATCH_JOINED", matchId, player: "B", state });
+    // Send MATCH_JOINED to each player with their assignment (always include stake/denom)
+    this.send(wsA, { type: "MATCH_JOINED", matchId, player: "A", state, stake, denom });
+    this.send(wsB, { type: "MATCH_JOINED", matchId, player: "B", state, stake, denom });
     this.broadcastState(match);
-    this.startTurnTimer(match);
+
+    // For stake matches, register the match on-chain so players can fund it
+    const isStake =
+      stake !== "0" &&
+      !addressA.startsWith("guest_") &&
+      !addressB.startsWith("guest_");
+    if (isStake) {
+      if (!process.env.CONTRACT_ADDRESS) {
+        console.warn(
+          `[Chain] CONTRACT_ADDRESS not set — skipping CreateMatch for ${matchId}. Players won't be able to fund.`,
+        );
+        this.broadcastToMatch(match, {
+          type: "STAKE_ERROR",
+          message: "Server not configured for on-chain matches (CONTRACT_ADDRESS not set)",
+        });
+        // Still start the game (non-stake fallback)
+        this.startTurnTimer(match);
+      } else {
+        // Await on-chain match creation before allowing funding
+        createOnChainMatch({
+          matchId,
+          playerA: addressA,
+          playerB: addressB,
+          stake,
+          denom,
+        })
+          .then(() => {
+            console.log(`[Chain] CreateMatch success for ${matchId}`);
+            this.broadcastToMatch(match, { type: "STAKE_READY", matchId });
+            // Do NOT start turn timer yet — wait for both PLAYER_FUNDED messages
+          })
+          .catch((err) => {
+            console.error(
+              `[Chain] CreateMatch failed for ${matchId}:`,
+              err.message,
+            );
+            this.broadcastToMatch(match, {
+              type: "STAKE_ERROR",
+              message: `On-chain match creation failed: ${err.message}`,
+            });
+            // Start the game anyway as non-stake fallback
+            this.startTurnTimer(match);
+          });
+      }
+    } else {
+      this.startTurnTimer(match);
+    }
 
     console.log(
-      `[GameServer] Match started: ${matchId} (${addressA} vs ${addressB})`,
+      `[GameServer] Match started: ${matchId} (${addressA} vs ${addressB})${isStake ? " [STAKE]" : ""}`,
     );
   }
 
   private handleMessage(ws: WebSocket, address: string, msg: ClientMessage) {
     if (msg.type === "PING") {
       this.send(ws, { type: "PONG" });
+      return;
+    }
+
+    // CHECK_ACTIVE_MATCH — lightweight probe from the lobby
+    if (msg.type === "CHECK_ACTIVE_MATCH") {
+      const active = this.findMatchByAddress(address);
+      if (active) {
+        this.send(ws, {
+          type: "ACTIVE_MATCH",
+          matchId: active.id,
+          stake: active.stake,
+          denom: active.denom,
+        });
+      } else {
+        const pending = this.findPendingByAddress(address);
+        if (pending) {
+          this.send(ws, {
+            type: "ACTIVE_MATCH",
+            matchId: pending.match.id,
+            stake: pending.match.stake,
+            denom: pending.match.denom,
+          });
+        } else {
+          this.send(ws, { type: "NO_ACTIVE_MATCH" });
+        }
+      }
+      return;
+    }
+
+    // CANCEL_MATCH can be sent while waiting (not turn-dependent)
+    if (msg.type === "CANCEL_MATCH") {
+      // Remove from waiting queue
+      if (
+        this.waitingPlayer &&
+        this.waitingPlayer.address === address &&
+        this.waitingPlayer.ws === ws
+      ) {
+        this.waitingPlayer = null;
+        console.log(`[GameServer] Waiting cancelled by: ${address}`);
+      }
+      // Remove pending match
+      const pending = this.findPendingByAddress(address);
+      if (pending) {
+        this.matches.delete(pending.key);
+        console.log(
+          `[GameServer] Pending match ${pending.match.id} cancelled by: ${address}`,
+        );
+      }
+      return;
+    }
+
+    // VISIBILITY changes — pause/resume when a player switches tabs
+    if (msg.type === "VISIBILITY_HIDDEN") {
+      const match = this.findMatchByAddress(address);
+      if (!match) return;
+      const conn = match.players.get(address);
+      if (!conn || conn.away) return;
+      conn.away = true;
+      this.pauseTurnTimer(match);
+      this.broadcastToMatch(match, { type: "GAME_PAUSED" });
+      this.broadcastToMatch(
+        match,
+        { type: "OPPONENT_DISCONNECTED", gracePeriodSeconds: RECONNECT_GRACE_MS / 1000 },
+        address,
+      );
+      console.log(`[GameServer] Player ${address} tab hidden → game paused`);
+      return;
+    }
+
+    if (msg.type === "VISIBILITY_VISIBLE") {
+      const match = this.findMatchByAddress(address);
+      if (!match) return;
+      const conn = match.players.get(address);
+      if (!conn || !conn.away) return;
+      conn.away = false;
+      const remainingMs = match.turnTimerRemainingMs || TURN_TIMEOUT_MS;
+      this.resumeTurnTimer(match);
+      this.broadcastToMatch(match, {
+        type: "GAME_RESUMED",
+        remainingTurnMs: remainingMs,
+      });
+      this.broadcastToMatch(match, { type: "OPPONENT_RECONNECTED" }, address);
+      console.log(`[GameServer] Player ${address} tab visible → game resumed (${remainingMs}ms remaining)`);
+      return;
+    }
+
+    // PLAYER_FUNDED — a player has completed their fund_match tx on-chain
+    if (msg.type === "PLAYER_FUNDED") {
+      const match = this.findMatchByAddress(address);
+      if (!match) return;
+      match.fundedPlayers.add(address);
+      console.log(`[GameServer] Player ${address} funded match ${match.id} (${match.fundedPlayers.size}/${match.players.size})`);
+
+      // When both players have funded, start the game
+      if (match.fundedPlayers.size >= match.players.size) {
+        console.log(`[GameServer] Both players funded for match ${match.id} — starting game`);
+        this.broadcastToMatch(match, { type: "BOTH_FUNDED", matchId: match.id });
+        this.startTurnTimer(match);
+      }
+      return;
+    }
+
+    // FORFEIT can be sent at any time (not turn-dependent)
+    if (msg.type === "FORFEIT") {
+      const match = this.findMatchByAddress(address);
+      if (!match) return;
+      const conn = match.players.get(address);
+      if (!conn) return;
+      const opponentPlayer: Player = conn.player === "A" ? "B" : "A";
+      this.broadcastToMatch(match, { type: "FORFEIT", address });
+      this.finishGame(match, opponentPlayer, 1);
       return;
     }
 
@@ -504,8 +777,13 @@ export class GameServer {
       `[GameServer] Match ${match.id} ended. Winner: ${winner}, multiplier: ${multiplier}, hash: ${gameHash}`,
     );
 
-    // Submit result on-chain
-    if (process.env.CONTRACT_ADDRESS && winnerAddress) {
+    // Submit result on-chain (only for stake matches with real wallets)
+    const isStakeMatch =
+      match.stake !== "0" &&
+      winnerAddress &&
+      !winnerAddress.startsWith("guest_") &&
+      ![...match.players.values()].some((p) => p.address.startsWith("guest_"));
+    if (process.env.CONTRACT_ADDRESS && isStakeMatch) {
       submitResult({
         matchId: match.id,
         winner: winnerAddress,
@@ -517,20 +795,26 @@ export class GameServer {
           err.message,
         );
       });
+    } else if (!isStakeMatch) {
+      console.log(
+        `[Chain] Skipping SubmitResult — not a stake match (stake: ${match.stake})`,
+      );
     } else {
       console.warn(
-        "[Chain] Skipping SubmitResult — CONTRACT_ADDRESS or winner address not set",
+        "[Chain] Skipping SubmitResult — CONTRACT_ADDRESS not set",
       );
     }
 
     this.matches.delete(match.id);
   }
 
-  private startTurnTimer(match: Match) {
+  private startTurnTimer(match: Match, timeoutMs: number = TURN_TIMEOUT_MS) {
+    match.turnTimerStartedAt = Date.now();
+    match.turnTimerRemainingMs = timeoutMs;
     match.turnTimer = setTimeout(() => {
       console.log(`[GameServer] Turn timeout for match ${match.id}`);
       this.finishTurn(match);
-    }, TURN_TIMEOUT_MS);
+    }, timeoutMs);
   }
 
   private clearTurnTimer(match: Match) {
@@ -538,16 +822,83 @@ export class GameServer {
       clearTimeout(match.turnTimer);
       match.turnTimer = undefined;
     }
+    match.turnTimerRemainingMs = undefined;
+    match.turnTimerStartedAt = undefined;
   }
 
-  private handleDisconnect(address: string) {
+  /** Pause turn timer, saving the remaining time */
+  private pauseTurnTimer(match: Match) {
+    if (match.turnTimer && match.turnTimerStartedAt) {
+      clearTimeout(match.turnTimer);
+      match.turnTimer = undefined;
+      const elapsed = Date.now() - match.turnTimerStartedAt;
+      match.turnTimerRemainingMs = Math.max(0, (match.turnTimerRemainingMs || TURN_TIMEOUT_MS) - elapsed);
+      match.turnTimerStartedAt = undefined;
+    }
+  }
+
+  /** Resume turn timer from where it was paused */
+  private resumeTurnTimer(match: Match) {
+    const remaining = match.turnTimerRemainingMs;
+    if (remaining !== undefined && remaining > 0) {
+      this.startTurnTimer(match, remaining);
+    } else {
+      this.startTurnTimer(match);
+    }
+  }
+
+  private handleDisconnect(address: string, closedWs: WebSocket) {
+    // Clean up waiting player if it was this one AND the WS matches
+    if (
+      this.waitingPlayer &&
+      this.waitingPlayer.address === address &&
+      this.waitingPlayer.ws === closedWs
+    ) {
+      this.waitingPlayer = null;
+      console.log(`[GameServer] Waiting player disconnected: ${address}`);
+    }
+
+    // Clean up pending matches — only if the stored WS is the one that closed
+    const pending = this.findPendingByAddress(address);
+    if (pending) {
+      const pConn = pending.match.players.get(address);
+      if (pConn && pConn.ws === closedWs) {
+        this.matches.delete(pending.key);
+        console.log(
+          `[GameServer] Pending match ${pending.match.id} removed (creator disconnected: ${address})`,
+        );
+      }
+    }
+
     const match = this.findMatchByAddress(address);
     if (!match) return;
 
     const conn = match.players.get(address);
     if (!conn) return;
 
+    // If the closed WS is NOT the stored WS, this is a stale close — ignore it
+    if (conn.ws !== closedWs) return;
+
     conn.disconnectedAt = Date.now();
+
+    // Check if ALL human players are disconnected (skip AI players)
+    const humanPlayers = [...match.players.values()].filter(
+      (p) => !match.aiPlayer || p.player !== match.aiPlayer,
+    );
+    const allDisconnected = humanPlayers.every((p) => p.disconnectedAt);
+    if (allDisconnected) {
+      // No humans left — clean up immediately
+      this.clearTurnTimer(match);
+      if (match.disconnectTimer) {
+        clearTimeout(match.disconnectTimer);
+      }
+      this.matches.delete(match.id);
+      console.log(
+        `[GameServer] All players disconnected from match ${match.id} — removed`,
+      );
+      return;
+    }
+
     this.broadcastToMatch(
       match,
       {
@@ -556,6 +907,10 @@ export class GameServer {
       },
       address,
     );
+
+    // Pause the turn timer so the disconnected player's turn doesn't time out
+    this.pauseTurnTimer(match);
+    this.broadcastToMatch(match, { type: "GAME_PAUSED" }, address);
 
     match.disconnectTimer = setTimeout(() => {
       const opponent = [...match.players.values()].find(
@@ -571,8 +926,22 @@ export class GameServer {
   }
 
   private findMatchByAddress(address: string): Match | null {
-    for (const match of this.matches.values()) {
+    for (const [key, match] of this.matches.entries()) {
+      // Skip pending matches — they are not active games
+      if (key.startsWith("pending_")) continue;
       if (match.players.has(address)) return match;
+    }
+    return null;
+  }
+
+  /** Find a pending match that this address created (key = pending_*) */
+  private findPendingByAddress(address: string): {
+    key: string;
+    match: Match;
+  } | null {
+    for (const [key, match] of this.matches.entries()) {
+      if (!key.startsWith("pending_")) continue;
+      if (match.players.has(address)) return { key, match };
     }
     return null;
   }

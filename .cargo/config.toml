@@ -3,3 +3,13 @@ wasm = "build --release --lib --target wasm32-unknown-unknown"
 unit-test = "test --lib"
 schema = "run --bin schema"
 integration-test = "test --lib integration_tests"
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C",
+    "link-arg=-s",
+    "-C",
+    "target-cpu=mvp",
+    "-C",
+    "target-feature=-reference-types,-bulk-memory,-sign-ext,-mutable-globals,-multivalue",
+]

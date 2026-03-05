@@ -46,6 +46,9 @@ pub enum ExecuteMsg {
     EmergencyCancel {
         match_id: String,
     },
+    CancelUnfunded {
+        match_id: String,
+    },
     UpdateConfig {
         server_authority: Option<String>,
         dispute_resolver: Option<String>,
