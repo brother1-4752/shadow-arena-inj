@@ -9,8 +9,8 @@ target/
 **/*.rs.bk
 
 # CosmWasm artifacts
-artifacts/*.wasm
-artifacts/checksums.txt
+**/artifacts/*.wasm
+**/artifacts/checksums.txt
 
 # Node (future server)
 node_modules/
