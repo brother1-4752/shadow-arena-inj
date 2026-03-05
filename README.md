@@ -1,85 +1,160 @@
-# CosmWasm Starter Pack
+# Shadow Arena: Ninja Backgammon
 
-This is a template to build smart contracts in Rust to run inside a
-[Cosmos SDK](https://github.com/cosmos/cosmos-sdk) module on all chains that enable it.
-To understand the framework better, please read the overview in the
-[cosmwasm repo](https://github.com/CosmWasm/cosmwasm/blob/master/README.md),
-and dig into the [cosmwasm docs](https://www.cosmwasm.com).
-This assumes you understand the theory and just want to get coding.
+> Tournament-grade Backgammon with on-chain settlement on Injective (Cosmos/CosmWasm)
 
-## Creating a new repo from template
+**Play backgammon with full tournament rules. Settle stakes trustlessly on-chain.**
 
-Assuming you have a recent version of Rust and Cargo installed
-(via [rustup](https://rustup.rs/)),
-then the following should get you a new repo to start a contract:
+[![Basic](https://github.com/brother1-4752/shadow-arena-inj/actions/workflows/Basic.yml/badge.svg)](https://github.com/brother1-4752/shadow-arena-inj/actions/workflows/Basic.yml)
 
-Install [cargo-generate](https://github.com/ashleygwilliams/cargo-generate) and cargo-run-script.
-Unless you did that before, run this line now:
+**Live Demo**: [shadow-arena.vercel.app](https://shadow-arena.vercel.app)
 
-```sh
-cargo install cargo-generate --features vendored-openssl
-cargo install cargo-run-script
+---
+
+## Overview
+
+Shadow Arena is a Web3 strategy game that combines traditional Backgammon's tournament ruleset with Injective blockchain's on-chain settlement.
+
+- **Gameplay** runs off-chain (WebSocket, server-authoritative) for real-time responsiveness
+- **Settlement** runs on-chain (CosmWasm escrow) for verifiable, trustless payouts
+- **No rule distortion** — standard 24-point board, 15 checkers, hit/bar/bear-off, doubles = 4 moves, gammon/backgammon multipliers
+
+## Architecture
+
+```
+┌─────────────┐    WebSocket     ┌─────────────────┐    Broadcast    ┌──────────────────┐
+│  Game Web    │ ◄──────────────► │  Game Server     │ ──────────────► │  CosmWasm        │
+│  (React/Vite)│                  │  (Node/TS)       │                 │  Escrow Contract │
+│              │                  │                   │                 │  (Injective)     │
+│  Keplr Wallet│ ─── sign tx ──► │  Engine + AI      │                 │                  │
+└─────────────┘                  └─────────────────┘                 └──────────────────┘
 ```
 
-Now, use it to create your new contract.
-Go to the folder in which you want to place it and run:
+### Monorepo Structure
 
-**Latest**
-
-```sh
-cargo generate --git https://github.com/CosmWasm/cw-template.git --name PROJECT_NAME
+```
+shadow-arena-inj/
+├── contracts/shadow_arena/   # CosmWasm smart contract (Rust)
+│   └── src/
+│       ├── contract.rs       # Execute/Query handlers
+│       ├── state.rs          # Match state machine
+│       ├── msg.rs            # Message types
+│       └── error.rs          # Contract errors
+├── server/                   # Game server (Node.js/TypeScript)
+│   └── src/
+│       ├── engine/           # Backgammon rules engine
+│       ├── ai/               # AI opponent (easy/normal difficulty)
+│       ├── ws/               # WebSocket server & matchmaking
+│       ├── chain/            # Injective SDK integration
+│       └── log/              # Game log & hash generation
+├── apps/game-web/            # Frontend (React + Vite)
+│   └── src/
+│       ├── components/       # GameBoard, Lobby, PlayerPanel, etc.
+│       └── hooks/            # useGameSocket, useContract, WalletContext
+├── schema/                   # Auto-generated contract JSON schemas
+└── .github/workflows/        # CI (test, lint, schema check, wasm build)
 ```
 
-For cloning minimal code repo:
+## On-Chain Settlement Flow
 
-```sh
-cargo generate --git https://github.com/CosmWasm/cw-template.git --name PROJECT_NAME -d minimal=true
+The smart contract is a **state machine for settlement**, not a game engine.
+
+```
+CreateMatch (server)
+  → FundMatch (player A) + FundMatch (player B)
+  → [off-chain game plays out]
+  → SubmitResult (server, with game_hash)
+  → ConfirmResult (player A) + ConfirmResult (player B)
+  → [dispute window]
+  → Claim (winner receives payout)
+
+Dispute path:
+  → RaiseDispute (either player)
+  → ResolveDispute (dispute resolver)
+  → Claim
 ```
 
-You will now have a new folder called `PROJECT_NAME` (I hope you changed that to something else)
-containing a simple working contract and build system that you can customize.
+**game_hash**: SHA-256 of the full match log. Anyone can replay the log and verify the hash matches what's on-chain.
 
-## Create a Repo
+## Tech Stack
 
-After generating, you have a initialized local git repo, but no commits, and no remote.
-Go to a server (eg. github) and create a new upstream repo (called `YOUR-GIT-URL` below).
-Then run the following:
+| Layer | Technology |
+|-------|-----------|
+| Blockchain | Injective Testnet (`injective-888`) |
+| Smart Contract | CosmWasm (Rust), `cw-storage-plus` |
+| Game Server | Node.js, TypeScript, WebSocket (`ws`) |
+| Frontend | React 18, Vite, TailwindCSS |
+| Wallet | Keplr (via `@injectivelabs/sdk-ts`) |
+| Deployment | Vercel (frontend), Render (server) |
 
-```sh
-# this is needed to create a valid Cargo.lock file (see below)
-cargo check
-git branch -M main
-git add .
-git commit -m 'Initial Commit'
-git remote add origin YOUR-GIT-URL
-git push -u origin main
+## Getting Started
+
+### Prerequisites
+
+- Rust + `wasm32-unknown-unknown` target
+- Node.js 18+
+- [Keplr wallet extension](https://www.keplr.app/) (for on-chain features)
+
+### Smart Contract
+
+```bash
+# Run tests
+cargo unit-test --locked
+
+# Build wasm
+RUSTFLAGS="-C link-arg=-s" cargo wasm --locked
+
+# Generate schema
+cargo schema --locked
 ```
 
-## CI Support
+### Game Server
 
-We have template configurations for both [GitHub Actions](.github/workflows/Basic.yml)
-and [Circle CI](.circleci/config.yml) in the generated project, so you can
-get up and running with CI right away.
+```bash
+cd server
+npm install
+cp .env.example .env  # configure CONTRACT_ADDRESS, SERVER_AUTHORITY_MNEMONIC
+npm run dev            # starts WebSocket server on :8080
+```
 
-One note is that the CI runs all `cargo` commands
-with `--locked` to ensure it uses the exact same versions as you have locally. This also means
-you must have an up-to-date `Cargo.lock` file, which is not auto-generated.
-The first time you set up the project (or after adding any dep), you should ensure the
-`Cargo.lock` file is updated, so the CI will test properly. This can be done simply by
-running `cargo check` or `cargo unit-test`.
+### Frontend
 
-## Using your project
+```bash
+cd apps/game-web
+npm install
+npm run dev            # starts Vite dev server on :5173
+```
 
-Once you have your custom repo, you should check out [Developing](./Developing.md) to explain
-more on how to run tests and develop code. Or go through the
-[online tutorial](https://docs.cosmwasm.com/) to get a better feel
-of how to develop.
+### Environment Variables
 
-[Publishing](./Publishing.md) contains useful information on how to publish your contract
-to the world, once you are ready to deploy it on a running blockchain. And
-[Importing](./Importing.md) contains information about pulling in other contracts or crates
-that have been published.
+**Server** (`server/.env`):
+| Variable | Description |
+|----------|-------------|
+| `CONTRACT_ADDRESS` | Deployed CosmWasm contract address |
+| `SERVER_AUTHORITY_MNEMONIC` | Server wallet mnemonic for SubmitResult |
+| `PORT` | WebSocket server port (default: 8080) |
 
-Please replace this README file with information about your specific project. You can keep
-the `Developing.md` and `Publishing.md` files as useful references, but please set some
-proper description in the README.
+**Frontend** (`apps/game-web/.env`):
+| Variable | Description |
+|----------|-------------|
+| `VITE_CONTRACT_ADDRESS` | CosmWasm contract address |
+| `VITE_WS_URL` | Game server WebSocket URL |
+
+## Game Modes
+
+- **Local AI** — Play against AI (easy/normal difficulty) with no wallet required
+- **Online PvP** — Real-time matches via WebSocket with optional on-chain staking
+- **Stake Mode** — PvP with INJ staking through the escrow contract
+
+## Contract Deployment
+
+Currently deployed on Injective Testnet:
+
+```
+Contract: inj1fkmq4sm8u2c8483sex889e3cyjw80r79qx7dy4
+Chain:    injective-888
+Code ID:  39271
+```
+
+## License
+
+MIT
