@@ -1,10 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/shadow-arena-favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React + TS</title>
+    <title>Shadow Arena</title>
     <style>
       body {
         margin: 0;
@@ -31,26 +36,32 @@
     <script>
       (function () {
         function reportGameSize() {
-          const height = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+          const height = Math.max(
+            document.body.scrollHeight,
+            document.documentElement.scrollHeight,
+          );
 
-          const width = Math.max(document.body.scrollWidth, document.documentElement.scrollWidth);
+          const width = Math.max(
+            document.body.scrollWidth,
+            document.documentElement.scrollWidth,
+          );
 
           window.parent.postMessage(
             {
-              type: 'GAME_SIZE_RESPONSE',
+              type: "GAME_SIZE_RESPONSE",
               height: height,
               width: width,
             },
-            '*',
+            "*",
           );
         }
 
-        window.addEventListener('load', reportGameSize);
+        window.addEventListener("load", reportGameSize);
 
-        window.addEventListener('resize', reportGameSize);
+        window.addEventListener("resize", reportGameSize);
 
-        window.addEventListener('message', function (event) {
-          if (event.data && event.data.type === 'REQUEST_GAME_SIZE') {
+        window.addEventListener("message", function (event) {
+          if (event.data && event.data.type === "REQUEST_GAME_SIZE") {
             reportGameSize();
           }
         });
